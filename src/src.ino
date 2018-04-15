@@ -1,32 +1,122 @@
-#include <Arduino.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
 
-#define BELL_PIN D0
+#include "config.h"
 
-int hertz = 30;
-int pulseRatio = 4; //on-time divider of transistor 
+WiFiClientSecure client;
+UniversalTelegramBot bot(BOTtoken, client);
+
+#define POLL_INTERVAL 1000
+
+unsigned long lastPoll = 0;   //last time messages' scan has been done
+bool Start = false;
+
+#define BELL_PIN 2
+#define ON_TIME 100 // on-time in ms
+
+bool triggered = false;
+
+String triggerWords[] = {
+    "#ping",
+    "unten aufmachen",
+    "/klingel"
+};
+
+void handleNewMessages(int numNewMessages) {
+
+  for (int i=0; i<numNewMessages; i++) {
+    telegramMessage msg = bot.messages[i];
+    String chat_id = String(msg.chat_id);
+    String text = msg.text;
+    Serial.println(chat_id + "  >  " + text);
+
+    String from_name = bot.messages[i].from_name;
+    if (from_name == "") from_name = "Guest";
+
+    if (text == "/help" || 
+        text == "/help@"+String(BOTname) || 
+        text == "/start" || 
+        text == "/start@"+String(BOTname)
+        ) {
+        String s = "Ich plinge eine Glocke im CoWo, wenn ich ein Triggerwort höre. Die aktuellen Trigger sind:\n";
+        for(byte i = 0; i < sizeof(triggerWords) / sizeof(triggerWords[0]); i++) {
+            s += triggerWords[i];
+            s += "\n";
+        }
+        bot.sendMessage(chat_id, s);
+    }
+
+
+    triggered = false;
+    text.toLowerCase();
+    for(byte i = 0; i < sizeof(triggerWords) / sizeof(triggerWords[0]); i++) {
+        if(text.indexOf(triggerWords[i]) > -1) {
+            triggered = true;
+            break;
+        }
+    }
+    if(triggered) {
+        Serial.println("TRIGGERED");
+    }
+  }
+}
+
 
 void setup() {
     Serial.begin(115200);
+    digitalWrite(BELL_PIN, HIGH); //low active, switch off
     pinMode(BELL_PIN, OUTPUT);
-    digitalWrite(BELL_PIN, LOW);
+  
+    // Set WiFi to station mode and disconnect from an AP if it was previously connected
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    delay(100);
+  
+    // attempt to connect to Wifi network:
+    Serial.print("Connecting to: ");
+    Serial.println(ssid);
+    WiFi.begin(ssid, password);
+  
+    while (WiFi.status() != WL_CONNECTED) {
+        Serial.print(".");
+        /*digitalWrite(BELL_PIN, LOW); //LED inverted
+        delay(5);
+        digitalWrite(BELL_PIN, HIGH);*/
+        delay(195);
+    }
+  
+    Serial.println("");
+    Serial.println("WiFi connected");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
 }
 
-unsigned long now, lastPulse = 0;
+unsigned long lastTrigger = 0;
+bool moreMessages = false;
 
 void loop() {
-    now = millis();
-
-    if(now - lastPulse >= (1000 / hertz)) {
-        lastPulse = now;
-        digitalWrite(BELL_PIN, HIGH);
+    if (millis() > lastPoll + POLL_INTERVAL || moreMessages)  {
+        Serial.println(String(micros()) + " loop, bot.getUpdates() begin");
+        int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+        Serial.println(String(micros()) + " loop, bot.getUpdates() end");
+        if(numNewMessages > 0) {
+            Serial.println(String(micros()) + " loop, handle begin");
+            handleNewMessages(numNewMessages);
+            Serial.println(String(micros()) + " loop, handle end");
+            numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+            moreMessages = (numNewMessages > 0);
+        }
+        lastPoll = millis();
     }
-    if(now - lastPulse >= (1000 / hertz) / pulseRatio) {
+    //Serial.println(millis());
+    if(triggered && !moreMessages) {
+        lastTrigger = millis();
+        triggered = false;
         digitalWrite(BELL_PIN, LOW);
+        lastPoll = millis(); // delay next poll to enable more accurate timing
     }
-
-
-
-    if(Serial.available()) {
-        hertz = Serial.parseInt();
+    if(millis() > lastTrigger + ON_TIME) { //todo only turn off once
+        digitalWrite(BELL_PIN, HIGH);
     }
 }
