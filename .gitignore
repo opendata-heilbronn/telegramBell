@@ -5,3 +5,6 @@
 .vscode
 .travis.yml
 lib
+.vscode/.browse.c_cpp.db*
+config.h
+data/
