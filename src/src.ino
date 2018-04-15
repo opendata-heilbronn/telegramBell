@@ -1,23 +1,72 @@
+/** Telegram Bell
+ *
+ * Author: LeoDJ
+ *
+ * This sketch implements a self-contained telegram bot that can ring a bell based on trigger words it detects.
+ *
+ * TODO: HTTP Endpoint, OTA
+ *
+ * Current problems: Due to the implementation of getUpdates in the UniversalTelegramBot library,
+ * the reaction time is very limited and is prone to lock up the main loop for seconds.
+ * Also, the library crashes if the message received is too big.
+ */
+
+#include "config.h"
 #include <ESP8266WiFi.h>
 #include <UniversalTelegramBot.h>
 #include <WiFiClientSecure.h>
 
-#include "config.h"
+/////////////////////////////////////
+// User Settings
+/////////////////////////////////////
+
+String triggerWords[] = {"#ping", "unten aufmachen", "/klingel"};
+
+#define BELL_PIN 2  // output pin
+#define ON_TIME 100 // on-time of output pin in ms
+
+// rate limiting on a per-user basis in ms, set to 0 to disable
+#define RATE_LIMIT (1 * 60 * 60 * 1000)
+
+#define POLL_INTERVAL 1000
+#define RATE_LIMIT_MAX_USERS 32
+
+/////////////////////////////////////
+// END User Settings
+/////////////////////////////////////
 
 WiFiClientSecure client;
 UniversalTelegramBot bot(BOTtoken, client);
 
-#define POLL_INTERVAL 1000
+String rateLimitUserID[RATE_LIMIT_MAX_USERS];
+unsigned long rateLimitUserTime[RATE_LIMIT_MAX_USERS];
+byte rateLimitIdx = 0;
 
 unsigned long lastPoll = 0; // last time messages' scan has been done
 bool Start = false;
-
-#define BELL_PIN 2
-#define ON_TIME 100 // on-time in ms
-
 bool triggered = false;
 
-String triggerWords[] = {"#ping", "unten aufmachen", "/klingel"};
+bool checkRateLimit(String userId) {
+    unsigned long now = millis();
+
+    for (byte i = 0; i < RATE_LIMIT_MAX_USERS; i++) {
+        // have to count down so the for loop always sees the newest entry first
+        byte idx = (rateLimitIdx - i) % RATE_LIMIT_MAX_USERS;
+        if (rateLimitUserID[idx] == userId) {
+            return (now < rateLimitUserTime[idx] + RATE_LIMIT); // returns true if user is rate-limited
+        }
+    }
+    return false;
+}
+
+void updateRateLimit(String userId, unsigned long time = millis()) {
+    rateLimitUserID[rateLimitIdx] = userId;
+    rateLimitUserTime[rateLimitIdx] = time;
+
+    rateLimitIdx++;
+    if (rateLimitIdx >= RATE_LIMIT_MAX_USERS)
+        rateLimitIdx = 0;
+}
 
 void handleNewMessages(int numNewMessages) {
     for (int i = 0; i < numNewMessages; i++) {
@@ -26,29 +75,28 @@ void handleNewMessages(int numNewMessages) {
         String text = msg.text;
         Serial.println(chat_id + "  >  " + text);
 
-        String from_name = bot.messages[i].from_name;
-        if (from_name == "")
-            from_name = "Guest";
-
-        if (text == "/help" || text == "/help@" + String(BOTname) || text == "/start" || text == "/start@" + String(BOTname)) {
-            String s = "Ich plinge eine Glocke im CoWo, wenn ich ein Triggerwort höre. Die aktuellen Trigger sind:\n";
-            for (byte i = 0; i < sizeof(triggerWords) / sizeof(triggerWords[0]); i++) {
-                s += triggerWords[i];
-                s += "\n";
+        if (msg.chat_id == authorizedChatID) {
+            if (text == "/help" || text == "/help@" + String(BOTname) || text == "/start" || text == "/start@" + String(BOTname)) {
+                String s = "Ich plinge eine Glocke im CoWo, wenn ich ein Triggerwort höre. Die aktuellen Trigger sind:\n";
+                for (byte i = 0; i < sizeof(triggerWords) / sizeof(triggerWords[0]); i++) {
+                    s += triggerWords[i];
+                    s += "\n";
+                }
+                bot.sendMessage(chat_id, s);
             }
-            bot.sendMessage(chat_id, s);
-        }
 
-        triggered = false;
-        text.toLowerCase();
-        for (byte i = 0; i < sizeof(triggerWords) / sizeof(triggerWords[0]); i++) {
-            if (text.indexOf(triggerWords[i]) > -1) {
-                triggered = true;
-                break;
+            if (!checkRateLimit(msg.from_id)) { // check if user is rate limited
+                triggered = false;
+                text.toLowerCase();
+                for (byte i = 0; i < sizeof(triggerWords) / sizeof(triggerWords[0]); i++) {
+                    if (text.indexOf(triggerWords[i]) > -1) {
+                        triggered = true;
+                        Serial.println("TRIGGERED");
+                        updateRateLimit(msg.from_id); // save that user has used the bell just now
+                        break;
+                    }
+                }
             }
-        }
-        if (triggered) {
-            Serial.println("TRIGGERED");
         }
     }
 }
@@ -77,29 +125,38 @@ void setup() {
     Serial.println("WiFi connected");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+
+    // massively improves response time, but latency to telegram servers must not exceed this, or else no updates will be received
+    bot.waitForResponse = 200;
 }
 
 unsigned long lastTrigger = 0;
-bool moreMessages = false;
+bool messageReceived = false;
+byte numNewMessages = 0;
 
 void loop() {
-    if (millis() > lastPoll + POLL_INTERVAL || moreMessages) {
-        int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-        if (numNewMessages > 0) {
-            handleNewMessages(numNewMessages);
-            numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-            moreMessages = (numNewMessages > 0);
-        }
-        lastPoll = millis();
-    }
-    // Serial.println(millis());
-    if (triggered && !moreMessages) {
+    if (triggered && !messageReceived) {
         lastTrigger = millis();
         triggered = false;
         digitalWrite(BELL_PIN, LOW);
-        // lastPoll = millis(); // delay next poll to enable more accurate timing
+        delay(ON_TIME); // due to blocking behaviour of bot.getUpdates()
+        digitalWrite(BELL_PIN, HIGH);
+        lastPoll = millis(); // delay next poll to enable more accurate timing
     }
+    /* //will be used again, once bot.getUpdates() is not as blocking
     if (millis() > lastTrigger + ON_TIME) { // todo only turn off once
         digitalWrite(BELL_PIN, HIGH);
+    }*/
+
+    // pause telegram polling, while sensitive pin timing is running
+    if (millis() > lastTrigger + ON_TIME) {
+        // This implementation of telegram polling does not lock up the whole code if more than one message arrives, but still needs much
+        // time for the getUpdates() function
+        if (millis() > lastPoll + POLL_INTERVAL || numNewMessages > 0) {
+            numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+            if (numNewMessages > 0) {
+                handleNewMessages(numNewMessages);
+            }
+        }
     }
 }
