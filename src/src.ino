@@ -79,7 +79,7 @@ void handleNewMessages(int numNewMessages) {
         String text = msg.text;
         Serial.println(chat_id + "  >  " + text);
 
-        if (msg.chat_id == authorizedChatID) {
+        if (msg.chat_id == authorizedChatID || msg.from_id == adminChatID) {
             if (text == "/help" || text == "/help@" + String(BOTname) || text == "/start" || text == "/start@" + String(BOTname)) {
                 String s = "Ich plinge eine Glocke im CoWo, wenn ich ein Triggerwort höre. Die aktuellen Trigger sind:\n";
                 for (byte i = 0; i < sizeof(triggerWords) / sizeof(triggerWords[0]); i++) {
@@ -89,7 +89,7 @@ void handleNewMessages(int numNewMessages) {
                 bot.sendMessage(chat_id, s);
             }
 
-            if (!checkRateLimit(msg.from_id)) { // check if user is rate limited
+            if (!checkRateLimit(msg.from_id) || msg.from_id == adminChatID) { // check if user is rate limited
                 triggered = false;
                 text.toLowerCase();
                 for (byte i = 0; i < sizeof(triggerWords) / sizeof(triggerWords[0]); i++) {
