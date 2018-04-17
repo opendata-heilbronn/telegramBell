@@ -4,6 +4,10 @@
 char ssid[] = "XXXXXX";     
 char password[] = "YYYYYY"; 
 
+#define HOSTNAME "telegramBell"
+#define otaPassword "admin"
+
+
 // Initialize Telegram BOT
 #define BOTtoken "XXXXXXXXX:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"  // your Bot Token (Get from Botfather)
 #define BOTname "botUsernameWithoutAt"

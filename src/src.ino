@@ -11,10 +11,14 @@
  * Also, the library crashes if the message received is too big.
  */
 
-#include "config.h"
+#include <ArduinoOTA.h>
 #include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
 #include <UniversalTelegramBot.h>
 #include <WiFiClientSecure.h>
+#include <WiFiUdp.h>
+
+#include "config.h"
 
 /////////////////////////////////////
 // User Settings
@@ -23,10 +27,10 @@
 String triggerWords[] = {"#ping", "unten aufmachen", "/klingel"};
 
 #define BELL_PIN 2  // output pin
-#define ON_TIME 100 // on-time of output pin in ms
+#define ON_TIME 200 // on-time of output pin in ms
 
 // rate limiting on a per-user basis in ms, set to 0 to disable
-#define RATE_LIMIT (1 * 60 * 60 * 1000)
+#define RATE_LIMIT (5 * 60 * 1000)
 
 #define POLL_INTERVAL 1000
 #define RATE_LIMIT_MAX_USERS 32
@@ -101,11 +105,47 @@ void handleNewMessages(int numNewMessages) {
     }
 }
 
+void initOTA() {
+    // Hostname defaults to esp8266-[ChipID]
+    ArduinoOTA.setHostname(HOSTNAME);
+
+    // No authentication by default
+    ArduinoOTA.setPassword(otaPassword);
+
+    ArduinoOTA.onStart([]() {
+        String type;
+        if (ArduinoOTA.getCommand() == U_FLASH)
+            type = "sketch";
+        else // U_SPIFFS
+            type = "filesystem";
+
+        // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+        Serial.println("Start updating " + type);
+    });
+    ArduinoOTA.onEnd([]() { Serial.println("\nEnd"); });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
+    ArduinoOTA.onError([](ota_error_t error) {
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR)
+            Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR)
+            Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR)
+            Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR)
+            Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR)
+            Serial.println("End Failed");
+    });
+    ArduinoOTA.begin();
+}
+
 void setup() {
     Serial.begin(115200);
     digitalWrite(BELL_PIN, HIGH); // low active, switch off
     pinMode(BELL_PIN, OUTPUT);
 
+    WiFi.hostname(HOSTNAME);
     // Set WiFi to station mode and disconnect from an AP if it was previously connected
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
@@ -126,8 +166,10 @@ void setup() {
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
 
+    initOTA();
+
     // massively improves response time, but latency to telegram servers must not exceed this, or else no updates will be received
-    bot.waitForResponse = 200;
+    bot.waitForResponse = 500;
 }
 
 unsigned long lastTrigger = 0;
@@ -135,6 +177,7 @@ bool messageReceived = false;
 byte numNewMessages = 0;
 
 void loop() {
+    ArduinoOTA.handle();
     if (triggered && !messageReceived) {
         lastTrigger = millis();
         triggered = false;
