@@ -14,3 +14,6 @@ char password[] = "YYYYYY";
 // only allow messages from authorized group
 #define authorizedChatID "12345678"
 #define adminChatID "11223344"
+
+//put user ID of banned users here, empty string for no bans
+String bannedUsers[] = {"12345678"};

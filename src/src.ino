@@ -45,10 +45,19 @@ UniversalTelegramBot bot(BOTtoken, client);
 String rateLimitUserID[RATE_LIMIT_MAX_USERS];
 unsigned long rateLimitUserTime[RATE_LIMIT_MAX_USERS];
 byte rateLimitIdx = 0;
+uint8_t bannedUsersSize = sizeof(bannedUsers) / sizeof(bannedUsers[0]);
 
 unsigned long lastPoll = 0; // last time messages' scan has been done
 bool Start = false;
 bool triggered = false;
+
+bool checkBanned(String userId) {
+    for(uint8_t i = 0; i < bannedUsersSize; i++) {
+        if(bannedUsers[i] == userId)
+            return true;
+    }
+    return false;
+}
 
 bool checkRateLimit(String userId) {
     unsigned long now = millis();
@@ -88,6 +97,9 @@ void handleNewMessages(int numNewMessages) {
                 }
                 bot.sendMessage(chat_id, s);
             }
+
+            if(checkBanned(msg.from_id)) 
+                return;
 
             if (!checkRateLimit(msg.from_id) || msg.from_id == adminChatID) { // check if user is rate limited
                 triggered = false;
